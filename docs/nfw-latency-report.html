@@ -1,0 +1,962 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AWS Network Firewall レイテンシーベンチマーク 実測レポート</title>
+<style>
+  @font-face {
+    font-family: 'IPAGothic';
+    src: local('IPAGothic'),
+         url('file:///usr/share/fonts/opentype/ipafont-gothic/ipag.ttf') format('truetype');
+  }
+  /* ========== Base ========== */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --blue:    #1a73e8;
+    --red:     #ea4335;
+    --green:   #34a853;
+    --orange:  #fbbc04;
+    --bg:      #ffffff;
+    --bg-light:#f8f9fa;
+    --border:  #dadce0;
+    --text:    #202124;
+    --text-sub:#5f6368;
+  }
+
+  body {
+    font-family: 'IPAGothic', 'Hiragino Kaku Gothic ProN', 'Noto Sans JP',
+                 'Yu Gothic', 'Meiryo', sans-serif;
+    font-size: 13px;
+    line-height: 1.7;
+    color: var(--text);
+    background: var(--bg);
+  }
+
+  .page {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 32px 40px;
+  }
+
+  /* ========== Header ========== */
+  .report-header {
+    background: linear-gradient(135deg, #1a73e8 0%, #0d47a1 100%);
+    color: #fff;
+    padding: 36px 40px;
+    border-radius: 8px;
+    margin-bottom: 32px;
+    position: relative;
+    overflow: hidden;
+  }
+  .report-header::before {
+    content: '';
+    position: absolute; top: -40px; right: -40px;
+    width: 200px; height: 200px;
+    background: rgba(255,255,255,0.06);
+    border-radius: 50%;
+  }
+  .report-header .badge {
+    display: inline-block;
+    background: rgba(255,255,255,0.2);
+    border: 1px solid rgba(255,255,255,0.4);
+    border-radius: 4px;
+    padding: 2px 10px;
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    margin-bottom: 12px;
+  }
+  .report-header h1 {
+    font-size: 26px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    margin-bottom: 10px;
+    line-height: 1.3;
+  }
+  .report-header .meta {
+    font-size: 13px;
+    opacity: 0.85;
+    display: flex;
+    gap: 24px;
+    flex-wrap: wrap;
+  }
+  .report-header .meta span::before {
+    content: '▸ ';
+    opacity: 0.7;
+  }
+
+  /* ========== Section ========== */
+  .section {
+    margin-bottom: 36px;
+  }
+  .section-title {
+    font-size: 17px;
+    font-weight: 700;
+    color: var(--blue);
+    border-bottom: 2px solid var(--blue);
+    padding-bottom: 6px;
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .section-title .num {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px; height: 26px;
+    background: var(--blue);
+    color: #fff;
+    border-radius: 50%;
+    font-size: 13px;
+    font-weight: 700;
+    flex-shrink: 0;
+  }
+
+  /* ========== Table ========== */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12.5px;
+    margin-top: 8px;
+  }
+  thead th {
+    background: var(--blue);
+    color: #fff;
+    padding: 8px 12px;
+    text-align: left;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+  thead th:first-child { border-radius: 4px 0 0 0; }
+  thead th:last-child  { border-radius: 0 4px 0 0; }
+  tbody tr:nth-child(even) { background: var(--bg-light); }
+  tbody td {
+    padding: 7px 12px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  .td-num { text-align: right; font-variant-numeric: tabular-nums; }
+  .highlight { font-weight: 700; color: var(--red); }
+  .sub-header th {
+    background: #e8f0fe;
+    color: var(--blue);
+    font-size: 12px;
+    padding: 5px 12px;
+  }
+
+  /* ========== Chart wrapper ========== */
+  .chart-wrap {
+    background: var(--bg-light);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 16px;
+    margin: 16px 0;
+  }
+  .chart-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-sub);
+    margin-bottom: 10px;
+    letter-spacing: 0.04em;
+  }
+
+  /* ========== Legend ========== */
+  .legend {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-top: 8px;
+    font-size: 11.5px;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .legend-dot {
+    width: 12px; height: 12px;
+    border-radius: 2px;
+    flex-shrink: 0;
+  }
+
+  /* ========== Phase badge ========== */
+  .phase-badge {
+    display: inline-block;
+    padding: 1px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 700;
+    color: #fff;
+  }
+  .ph0 { background: #5f6368; }
+  .ph1 { background: #34a853; }
+  .ph2 { background: #fbbc04; color: #202124; }
+  .ph3 { background: #ea4335; }
+
+  /* ========== Callout ========== */
+  .callout {
+    border-left: 4px solid var(--blue);
+    background: #e8f0fe;
+    border-radius: 0 6px 6px 0;
+    padding: 10px 14px;
+    margin: 14px 0;
+    font-size: 12.5px;
+  }
+  .callout.warn {
+    border-color: var(--orange);
+    background: #fff8e1;
+  }
+  .callout.key {
+    border-color: var(--red);
+    background: #fce8e6;
+  }
+
+  /* ========== Bullet list ========== */
+  .bullet-list {
+    list-style: none;
+    padding: 0;
+  }
+  .bullet-list li {
+    padding: 5px 0 5px 20px;
+    position: relative;
+    font-size: 12.5px;
+    border-bottom: 1px solid #f0f0f0;
+  }
+  .bullet-list li:last-child { border-bottom: none; }
+  .bullet-list li::before {
+    content: '▸';
+    color: var(--blue);
+    position: absolute;
+    left: 4px;
+  }
+
+  /* ========== Footer ========== */
+  .report-footer {
+    margin-top: 40px;
+    padding-top: 14px;
+    border-top: 1px solid var(--border);
+    font-size: 11px;
+    color: var(--text-sub);
+    display: flex;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  /* ========== Print ========== */
+  @media print {
+    body { font-size: 11px; }
+    .page { padding: 0; max-width: 100%; }
+    .section { margin-bottom: 24px; page-break-inside: avoid; }
+    .chart-wrap { page-break-inside: avoid; }
+    table { page-break-inside: avoid; }
+    .report-header { -webkit-print-color-adjust: exact; print-color-adjust: exact; border-radius: 0; }
+    thead th { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .phase-badge { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .legend-dot  { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .section-title .num { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  }
+  @page { size: A4; margin: 15mm; }
+</style>
+</head>
+<body>
+<div class="page">
+
+<!-- ========================================================
+     HEADER
+     ======================================================== -->
+<div class="report-header">
+  <div class="badge">BENCHMARK REPORT</div>
+  <h1>AWS Network Firewall<br>レイテンシーベンチマーク 実測レポート</h1>
+  <div class="meta">
+    <span>作成日: 2026年3月19日</span>
+    <span>リージョン: ap-northeast-1</span>
+    <span>インスタンス: c5.large</span>
+    <span>AZ: ap-northeast-1a</span>
+  </div>
+</div>
+
+
+<!-- ========================================================
+     1. アーキテクチャ図
+     ======================================================== -->
+<div class="section">
+  <div class="section-title"><span class="num">1</span>テスト構成アーキテクチャ</div>
+
+  <!-- Inline SVG architecture diagram -->
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 380" style="width:100%;max-width:820px;display:block;font-family:'IPAGothic','Hiragino Kaku Gothic ProN','Noto Sans JP',sans-serif;">
+    <defs>
+      <marker id="arr-blue" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+        <polygon points="0 0, 10 3.5, 0 7" fill="#1a73e8"/>
+      </marker>
+      <marker id="arr-green" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+        <polygon points="0 0, 10 3.5, 0 7" fill="#34a853"/>
+      </marker>
+      <marker id="arr-gray" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+        <polygon points="0 0, 8 3, 0 6" fill="#9aa0a6"/>
+      </marker>
+      <filter id="shadow" x="-5%" y="-5%" width="110%" height="110%">
+        <feDropShadow dx="1" dy="2" stdDeviation="2" flood-opacity="0.12"/>
+      </filter>
+    </defs>
+
+    <!-- VPC outer box -->
+    <rect x="10" y="10" width="800" height="340" rx="10" ry="10"
+          fill="#f8fbff" stroke="#1a73e8" stroke-width="2" stroke-dasharray="8,4"/>
+    <text x="24" y="30" font-size="12" fill="#1a73e8" font-weight="700">VPC  10.0.0.0/16  (ap-northeast-1a)</text>
+
+    <!-- ── Client Subnet ── -->
+    <rect x="30" y="50" width="190" height="250" rx="8" fill="#e6f4ea" stroke="#34a853" stroke-width="1.5" filter="url(#shadow)"/>
+    <text x="125" y="72" font-size="11" fill="#137333" font-weight="700" text-anchor="middle">Client Subnet</text>
+    <text x="125" y="86" font-size="10" fill="#137333" text-anchor="middle">10.0.0.0/24</text>
+
+    <!-- ClientInst box -->
+    <rect x="48" y="100" width="154" height="64" rx="6" fill="#fff" stroke="#34a853" stroke-width="1"/>
+    <text x="125" y="121" font-size="10.5" fill="#202124" font-weight="600" text-anchor="middle">ClientInst</text>
+    <text x="125" y="137" font-size="9.5" fill="#5f6368" text-anchor="middle">10.0.0.10</text>
+    <!-- Server icon: monitor -->
+    <rect x="109" y="143" width="32" height="16" rx="2" fill="#34a853" opacity="0.3"/>
+    <line x1="121" y1="159" x2="129" y2="159" stroke="#34a853" stroke-width="1"/>
+
+    <!-- BaselineInst box -->
+    <rect x="48" y="178" width="154" height="64" rx="6" fill="#fff" stroke="#5f6368" stroke-width="1" stroke-dasharray="4,2"/>
+    <text x="125" y="199" font-size="10.5" fill="#202124" font-weight="600" text-anchor="middle">BaselineInst</text>
+    <text x="125" y="215" font-size="9.5" fill="#5f6368" text-anchor="middle">10.0.0.20</text>
+    <text x="125" y="232" font-size="9" fill="#5f6368" text-anchor="middle">(経路B 受信側)</text>
+
+    <!-- ── Firewall Subnet ── -->
+    <rect x="310" y="50" width="200" height="250" rx="8" fill="#fff3e0" stroke="#e65100" stroke-width="1.5" filter="url(#shadow)"/>
+    <text x="410" y="72" font-size="11" fill="#bf360c" font-weight="700" text-anchor="middle">Firewall Subnet</text>
+    <text x="410" y="86" font-size="10" fill="#bf360c" text-anchor="middle">10.0.1.0/24</text>
+
+    <!-- Shield shape for NFW Endpoint -->
+    <g transform="translate(367,105)">
+      <!-- Shield body -->
+      <path d="M43 0 L86 18 L86 54 Q86 90 43 106 Q0 90 0 54 L0 18 Z"
+            fill="#fff3e0" stroke="#e65100" stroke-width="2" transform="scale(0.55)"/>
+      <path d="M43 12 L76 26 L76 54 Q76 82 43 96 Q10 82 10 54 L10 26 Z"
+            fill="#ffcc80" stroke="none" transform="scale(0.55)"/>
+      <!-- Lock icon inside shield -->
+      <rect x="18" y="28" width="11" height="9" rx="1" fill="#e65100" transform="scale(0.55)"/>
+      <path d="M20 28 Q20 21 28 21 Q36 21 36 28" fill="none" stroke="#e65100" stroke-width="2.5" transform="scale(0.55)"/>
+      <circle cx="28" cy="33" r="2" fill="#fff" transform="scale(0.55)"/>
+    </g>
+    <text x="410" y="170" font-size="11" fill="#bf360c" font-weight="700" text-anchor="middle">NFW Endpoint</text>
+    <text x="410" y="184" font-size="9.5" fill="#5f6368" text-anchor="middle">vpce-xxxxxxxx</text>
+
+    <!-- ── Server Subnet ── -->
+    <rect x="600" y="50" width="190" height="250" rx="8" fill="#e8f0fe" stroke="#1a73e8" stroke-width="1.5" filter="url(#shadow)"/>
+    <text x="695" y="72" font-size="11" fill="#1558b0" font-weight="700" text-anchor="middle">Server Subnet</text>
+    <text x="695" y="86" font-size="10" fill="#1558b0" text-anchor="middle">10.0.2.0/24</text>
+
+    <!-- ServerInst box -->
+    <rect x="618" y="100" width="154" height="64" rx="6" fill="#fff" stroke="#1a73e8" stroke-width="1"/>
+    <text x="695" y="121" font-size="10.5" fill="#202124" font-weight="600" text-anchor="middle">ServerInst</text>
+    <text x="695" y="137" font-size="9.5" fill="#5f6368" text-anchor="middle">10.0.2.10</text>
+    <!-- Server icon -->
+    <rect x="679" y="143" width="32" height="16" rx="2" fill="#1a73e8" opacity="0.3"/>
+    <line x1="691" y1="159" x2="699" y2="159" stroke="#1a73e8" stroke-width="1"/>
+
+    <!-- iperf3 / nping label -->
+    <text x="695" y="185" font-size="9.5" fill="#5f6368" text-anchor="middle">nping / iperf3</text>
+    <text x="695" y="198" font-size="9.5" fill="#5f6368" text-anchor="middle">listener</text>
+
+    <!-- VPC Endpoints (small) -->
+    <rect x="618" y="220" width="154" height="40" rx="4" fill="#fff" stroke="#9aa0a6" stroke-width="1"/>
+    <text x="695" y="237" font-size="9" fill="#5f6368" text-anchor="middle">SSM VPC Endpoint</text>
+    <text x="695" y="252" font-size="9" fill="#5f6368" text-anchor="middle">S3 VPC Endpoint</text>
+
+    <!-- ──────────────────────────────────────────────────── -->
+    <!-- Route A: ClientInst -> NFW Endpoint -> ServerInst -->
+    <!-- Arrow: Client subnet right edge -> Firewall subnet left edge -->
+    <line x1="220" y1="132" x2="308" y2="148"
+          stroke="#1a73e8" stroke-width="2.2"
+          marker-end="url(#arr-blue)"/>
+    <!-- Arrow: Firewall subnet right edge -> Server subnet left edge -->
+    <line x1="512" y1="148" x2="598" y2="132"
+          stroke="#1a73e8" stroke-width="2.2"
+          marker-end="url(#arr-blue)"/>
+
+    <!-- Route A label -->
+    <rect x="290" y="230" width="240" height="22" rx="4" fill="#e8f0fe" stroke="#1a73e8" stroke-width="1"/>
+    <text x="410" y="245" font-size="10" fill="#1a73e8" font-weight="700" text-anchor="middle">経路A: NFW経由 (Phase 1/2/3)</text>
+
+    <!-- Route B: ClientInst -> BaselineInst (same subnet, dashed green) -->
+    <!-- Curved line within Client subnet area, shown below -->
+    <path d="M 125 242 Q 30 290 125 295"
+          fill="none" stroke="#34a853" stroke-width="2" stroke-dasharray="6,3"
+          marker-end="url(#arr-green)"/>
+    <text x="125" y="318" font-size="9.5" fill="#137333" font-weight="600" text-anchor="middle">経路B: 直接通信</text>
+    <text x="125" y="330" font-size="9" fill="#137333" text-anchor="middle">(Phase 0 Baseline)</text>
+
+    <!-- Route connector label below diagram -->
+    <text x="30" y="365" font-size="9.5" fill="#5f6368">
+      ※ ルートテーブル: Client subnet → IGW/NFW Endpoint; Firewall subnet → Server subnet
+    </text>
+  </svg>
+
+  <div class="callout" style="margin-top:10px;">
+    同一 AZ (ap-northeast-1a) 内の構成。経路A は ClientInst → NFW Endpoint (Firewall Subnet) → ServerInst を経由。
+    経路B は ClientInst → BaselineInst の同一サブネット直接通信でベースラインを計測。
+  </div>
+</div>
+
+
+<!-- ========================================================
+     2. テスト環境
+     ======================================================== -->
+<div class="section">
+  <div class="section-title"><span class="num">2</span>テスト環境</div>
+  <table>
+    <thead>
+      <tr><th style="width:30%">項目</th><th>内容</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>リージョン / AZ</td><td>ap-northeast-1 / ap-northeast-1a</td></tr>
+      <tr><td>インスタンスタイプ</td><td>c5.large（3台: ClientInst / BaselineInst / ServerInst）</td></tr>
+      <tr><td>OS</td><td>Amazon Linux 2023</td></tr>
+      <tr><td>計測ツール</td>
+          <td>
+            nping（TCP RTT, n=100, 100pps, port 5201）<br>
+            ping（ICMP RTT, n=100, 0.1秒間隔）<br>
+            iperf3（スループット, 10秒）<br>
+            curl（HTTPS TLS ハンドシェイク, n=50）
+          </td></tr>
+      <tr><td>NFW ルールグループ</td>
+          <td>
+            ステートレス: TCP+ICMP pass（優先度 100）<br>
+            ステートフル: Suricata pass all（STRICT_ORDER）
+          </td></tr>
+      <tr><td>TLS 検査構成（Phase 3）</td><td>AWS Certificate Manager + TLS inspection configuration（STRICT_ORDER）</td></tr>
+    </tbody>
+  </table>
+</div>
+
+
+<!-- ========================================================
+     3. フェーズ定義
+     ======================================================== -->
+<div class="section">
+  <div class="section-title"><span class="num">3</span>フェーズ定義</div>
+  <table>
+    <thead>
+      <tr>
+        <th style="width:12%">Phase</th>
+        <th style="width:35%">構成</th>
+        <th>ファイアウォールポリシー</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><span class="phase-badge ph0">Phase 0</span><br><small>Baseline</small></td>
+        <td>同一サブネット直接通信<br>（Client → BaselineInst）</td>
+        <td>NFW 経由なし</td>
+      </tr>
+      <tr>
+        <td><span class="phase-badge ph1">Phase 1</span></td>
+        <td>NFW 経由<br>ステートレスルールのみ</td>
+        <td><code>statelessDefaultActions = aws:pass</code></td>
+      </tr>
+      <tr>
+        <td><span class="phase-badge ph2">Phase 2</span></td>
+        <td>NFW 経由<br>ステートフルルール追加</td>
+        <td><code>statelessDefaultActions = aws:forward_to_sfe</code><br>ステートフル: Suricata pass all</td>
+      </tr>
+      <tr>
+        <td><span class="phase-badge ph3">Phase 3</span></td>
+        <td>NFW 経由<br>TLS 検査有効</td>
+        <td>STRICT_ORDER + TLS inspection config</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+
+<!-- ========================================================
+     4. 計測結果
+     ======================================================== -->
+<div class="section">
+  <div class="section-title"><span class="num">4</span>計測結果</div>
+
+  <!-- ── 4-1 TCP RTT ── -->
+  <h3 style="font-size:14px;color:#202124;margin:0 0 10px 0;">4-1. TCP RTT &nbsp;<small style="font-weight:400;color:#5f6368;font-size:12px;">nping, Port 5201, n=100, 100pps</small></h3>
+
+  <!-- Bar chart: grouped by Phase, bars = p50/p95/p99 -->
+  <div class="chart-wrap">
+    <div class="chart-title">TCP RTT by Phase — p50 / p95 / p99 (ms)</div>
+
+    <!--
+      Data:
+        Baseline  p50=0.100  p95=0.100  p99=0.300
+        Phase 1   p50=0.900  p95=1.000  p99=1.500
+        Phase 2   p50=0.700  p95=0.800  p99=3.500
+        Phase 3   p50=0.800  p95=0.900  p99=1.600
+
+      Scale: max = 3.5ms  -> chart height 200px -> 1ms = 200/3.5 ≈ 57.14px
+    -->
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 270"
+         style="width:100%;max-width:680px;display:block;overflow:visible;
+                font-family:'IPAGothic','Hiragino Kaku Gothic ProN','Noto Sans JP',sans-serif;">
+      <defs>
+        <!-- Grid lines will be drawn manually -->
+      </defs>
+
+      <!-- coordinate: origin X=60, Y=230; chart height=200, width per group=130, gap=20 -->
+
+      <!-- Y-axis grid + labels -->
+      <!-- 0 ms -->
+      <line x1="55" y1="230" x2="620" y2="230" stroke="#e0e0e0" stroke-width="1"/>
+      <text x="50" y="233" font-size="10" fill="#9aa0a6" text-anchor="end">0</text>
+      <!-- 0.5 ms -->
+      <line x1="55" y1="201" x2="620" y2="201" stroke="#e8e8e8" stroke-width="0.7" stroke-dasharray="4,3"/>
+      <text x="50" y="204" font-size="10" fill="#9aa0a6" text-anchor="end">0.5</text>
+      <!-- 1.0 ms -->
+      <line x1="55" y1="173" x2="620" y2="173" stroke="#e8e8e8" stroke-width="0.7" stroke-dasharray="4,3"/>
+      <text x="50" y="176" font-size="10" fill="#9aa0a6" text-anchor="end">1.0</text>
+      <!-- 1.5 ms -->
+      <line x1="55" y1="144" x2="620" y2="144" stroke="#e8e8e8" stroke-width="0.7" stroke-dasharray="4,3"/>
+      <text x="50" y="147" font-size="10" fill="#9aa0a6" text-anchor="end">1.5</text>
+      <!-- 2.0 ms -->
+      <line x1="55" y1="116" x2="620" y2="116" stroke="#e8e8e8" stroke-width="0.7" stroke-dasharray="4,3"/>
+      <text x="50" y="119" font-size="10" fill="#9aa0a6" text-anchor="end">2.0</text>
+      <!-- 2.5 ms -->
+      <line x1="55" y1="87" x2="620" y2="87" stroke="#e8e8e8" stroke-width="0.7" stroke-dasharray="4,3"/>
+      <text x="50" y="90" font-size="10" fill="#9aa0a6" text-anchor="end">2.5</text>
+      <!-- 3.0 ms -->
+      <line x1="55" y1="59" x2="620" y2="59" stroke="#e8e8e8" stroke-width="0.7" stroke-dasharray="4,3"/>
+      <text x="50" y="62" font-size="10" fill="#9aa0a6" text-anchor="end">3.0</text>
+      <!-- 3.5 ms -->
+      <line x1="55" y1="30" x2="620" y2="30" stroke="#d0d0d0" stroke-width="1" stroke-dasharray="4,3"/>
+      <text x="50" y="33" font-size="10" fill="#9aa0a6" text-anchor="end">3.5</text>
+
+      <!-- Y-axis label -->
+      <text x="16" y="135" font-size="10" fill="#5f6368" text-anchor="middle"
+            transform="rotate(-90,16,135)">RTT (ms)</text>
+
+      <!-- scale helper: 1ms = 200/3.5 ≈ 57.143px   y = 230 - val*57.143 -->
+      <!-- Baseline: p50=0.1→224.3, p95=0.1→224.3, p99=0.3→213 -->
+      <!-- Phase1:   p50=0.9→179, p95=1.0→173, p99=1.5→144 -->
+      <!-- Phase2:   p50=0.7→190, p95=0.8→184, p99=3.5→30 -->
+      <!-- Phase3:   p50=0.8→184, p95=0.9→179, p99=1.6→139 -->
+
+      <!-- bar width=28, gap between bars=4, group offset from center: -48, -16, +16 (left edge) -->
+      <!-- Groups at x-center: Baseline=115, Ph1=255, Ph2=395, Ph3=535 -->
+
+      <!-- Colors: p50=#1a73e8, p95=#34a853, p99=#ea4335 -->
+
+      <!-- === Baseline (center=115) === -->
+      <!-- p50: h=5.7  y=224.3 -->
+      <rect x="79"  y="224" width="28" height="6"  fill="#1a73e8" rx="2"/>
+      <!-- p95: h=5.7 -->
+      <rect x="111" y="224" width="28" height="6"  fill="#34a853" rx="2"/>
+      <!-- p99: h=17.1 -->
+      <rect x="143" y="213" width="28" height="17" fill="#ea4335" rx="2"/>
+      <!-- value labels -->
+      <text x="93"  y="221" font-size="9" fill="#1a73e8" text-anchor="middle">0.10</text>
+      <text x="125" y="221" font-size="9" fill="#34a853" text-anchor="middle">0.10</text>
+      <text x="157" y="210" font-size="9" fill="#ea4335" text-anchor="middle">0.30</text>
+      <!-- x-axis label -->
+      <text x="115" y="248" font-size="11" fill="#202124" font-weight="600" text-anchor="middle">Baseline</text>
+      <text x="115" y="260" font-size="10" fill="#5f6368" text-anchor="middle">(Phase 0)</text>
+
+      <!-- === Phase 1 (center=255) === -->
+      <!-- p50: h=51.4  y=178.6 -->
+      <rect x="219" y="179" width="28" height="51" fill="#1a73e8" rx="2"/>
+      <!-- p95: h=57.1  y=172.9 -->
+      <rect x="251" y="173" width="28" height="57" fill="#34a853" rx="2"/>
+      <!-- p99: h=85.7  y=144.3 -->
+      <rect x="283" y="144" width="28" height="86" fill="#ea4335" rx="2"/>
+      <text x="233" y="176" font-size="9" fill="#1a73e8" text-anchor="middle">0.90</text>
+      <text x="265" y="170" font-size="9" fill="#34a853" text-anchor="middle">1.00</text>
+      <text x="297" y="141" font-size="9" fill="#ea4335" text-anchor="middle">1.50</text>
+      <text x="255" y="248" font-size="11" fill="#202124" font-weight="600" text-anchor="middle">Phase 1</text>
+      <text x="255" y="260" font-size="10" fill="#5f6368" text-anchor="middle">ステートレス</text>
+
+      <!-- === Phase 2 (center=395) === -->
+      <!-- p50: h=40  y=190 -->
+      <rect x="359" y="190" width="28" height="40" fill="#1a73e8" rx="2"/>
+      <!-- p95: h=45.7 y=184.3 -->
+      <rect x="391" y="184" width="28" height="46" fill="#34a853" rx="2"/>
+      <!-- p99: h=200  y=30 -->
+      <rect x="423" y="30"  width="28" height="200" fill="#ea4335" rx="2"/>
+      <text x="373" y="187" font-size="9" fill="#1a73e8" text-anchor="middle">0.70</text>
+      <text x="405" y="181" font-size="9" fill="#34a853" text-anchor="middle">0.80</text>
+      <text x="437" y="27"  font-size="9" fill="#ea4335" text-anchor="middle">3.50</text>
+      <text x="395" y="248" font-size="11" fill="#202124" font-weight="600" text-anchor="middle">Phase 2</text>
+      <text x="395" y="260" font-size="10" fill="#5f6368" text-anchor="middle">ステートフル</text>
+
+      <!-- === Phase 3 (center=535) === -->
+      <!-- p50: h=45.7 y=184.3 -->
+      <rect x="499" y="184" width="28" height="46" fill="#1a73e8" rx="2"/>
+      <!-- p95: h=51.4 y=178.6 -->
+      <rect x="531" y="179" width="28" height="51" fill="#34a853" rx="2"/>
+      <!-- p99: h=91.4 y=138.6 -->
+      <rect x="563" y="139" width="28" height="91" fill="#ea4335" rx="2"/>
+      <text x="513" y="181" font-size="9" fill="#1a73e8" text-anchor="middle">0.80</text>
+      <text x="545" y="176" font-size="9" fill="#34a853" text-anchor="middle">0.90</text>
+      <text x="577" y="136" font-size="9" fill="#ea4335" text-anchor="middle">1.60</text>
+      <text x="535" y="248" font-size="11" fill="#202124" font-weight="600" text-anchor="middle">Phase 3</text>
+      <text x="535" y="260" font-size="10" fill="#5f6368" text-anchor="middle">TLS検査</text>
+    </svg>
+
+    <div class="legend">
+      <div class="legend-item"><div class="legend-dot" style="background:#1a73e8;"></div>p50</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#34a853;"></div>p95</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#ea4335;"></div>p99</div>
+    </div>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>パーセンタイル</th>
+        <th class="td-num">Baseline (Phase 0)</th>
+        <th class="td-num">Phase 1</th>
+        <th class="td-num">Phase 2</th>
+        <th class="td-num">Phase 3</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>p50</td>
+        <td class="td-num">0.100 ms</td>
+        <td class="td-num">0.900 ms</td>
+        <td class="td-num">0.700 ms</td>
+        <td class="td-num">0.800 ms</td>
+      </tr>
+      <tr>
+        <td>p95</td>
+        <td class="td-num">0.100 ms</td>
+        <td class="td-num">1.000 ms</td>
+        <td class="td-num">0.800 ms</td>
+        <td class="td-num">0.900 ms</td>
+      </tr>
+      <tr>
+        <td>p99</td>
+        <td class="td-num">0.300 ms</td>
+        <td class="td-num">1.500 ms</td>
+        <td class="td-num" style="color:var(--red);font-weight:700;">3.500 ms</td>
+        <td class="td-num">1.600 ms</td>
+      </tr>
+      <tr style="background:#e8f0fe;">
+        <td><strong>NFW 追加レイテンシー (p50)</strong></td>
+        <td class="td-num">—</td>
+        <td class="td-num highlight">+0.800 ms</td>
+        <td class="td-num highlight">+0.600 ms</td>
+        <td class="td-num highlight">+0.700 ms</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="callout key" style="margin-top:12px;">
+    Phase 2 の p99 が <strong>3.500 ms</strong> と突出して高い。ステートフル処理による初回フロー検査コストが尾部レイテンシーに影響している。
+  </div>
+
+  <!-- ── 4-2 ICMP RTT ── -->
+  <h3 style="font-size:14px;color:#202124;margin:24px 0 10px 0;">4-2. ICMP RTT &nbsp;<small style="font-weight:400;color:#5f6368;font-size:12px;">ping, n=100, 0.1秒間隔</small></h3>
+
+  <!-- Horizontal bar chart for ICMP avg -->
+  <div class="chart-wrap">
+    <div class="chart-title">ICMP RTT avg (ms) — Phase 別比較</div>
+    <!--
+      Baseline=0.074, Ph1=0.628, Ph2=0.797, Ph3=0.630
+      max=0.797 -> scale to width 500px -> 1ms=627.4px -> use 500/0.85=588px per ms
+      bar height=24, gap=12
+    -->
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 170"
+         style="width:100%;max-width:640px;display:block;
+                font-family:'IPAGothic','Hiragino Kaku Gothic ProN','Noto Sans JP',sans-serif;">
+
+      <!-- scale: 0.85ms -> 500px; 1ms=588.2px -->
+      <!-- x-axis labels -->
+      <text x="140" y="160" font-size="9.5" fill="#9aa0a6" text-anchor="middle">0</text>
+      <text x="200" y="160" font-size="9.5" fill="#9aa0a6" text-anchor="middle">0.1</text>
+      <text x="259" y="160" font-size="9.5" fill="#9aa0a6" text-anchor="middle">0.2</text>
+      <text x="318" y="160" font-size="9.5" fill="#9aa0a6" text-anchor="middle">0.3</text>
+      <text x="377" y="160" font-size="9.5" fill="#9aa0a6" text-anchor="middle">0.4</text>
+      <text x="436" y="160" font-size="9.5" fill="#9aa0a6" text-anchor="middle">0.5</text>
+      <text x="495" y="160" font-size="9.5" fill="#9aa0a6" text-anchor="middle">0.6</text>
+      <text x="554" y="160" font-size="9.5" fill="#9aa0a6" text-anchor="middle">0.7</text>
+      <text x="613" y="160" font-size="9.5" fill="#9aa0a6" text-anchor="middle">0.8</text>
+      <!-- x-axis unit -->
+      <text x="390" y="170" font-size="9.5" fill="#5f6368" text-anchor="middle">avg RTT (ms)</text>
+
+      <!-- vertical grid lines at 0.1ms intervals -->
+      <line x1="200" y1="10" x2="200" y2="152" stroke="#f0f0f0" stroke-width="1"/>
+      <line x1="259" y1="10" x2="259" y2="152" stroke="#f0f0f0" stroke-width="1"/>
+      <line x1="318" y1="10" x2="318" y2="152" stroke="#f0f0f0" stroke-width="1"/>
+      <line x1="377" y1="10" x2="377" y2="152" stroke="#f0f0f0" stroke-width="1"/>
+      <line x1="436" y1="10" x2="436" y2="152" stroke="#f0f0f0" stroke-width="1"/>
+      <line x1="495" y1="10" x2="495" y2="152" stroke="#f0f0f0" stroke-width="1"/>
+      <line x1="554" y1="10" x2="554" y2="152" stroke="#f0f0f0" stroke-width="1"/>
+      <line x1="613" y1="10" x2="613" y2="152" stroke="#f0f0f0" stroke-width="1"/>
+
+      <!-- y-axis -->
+      <line x1="140" y1="10" x2="140" y2="152" stroke="#d0d0d0" stroke-width="1"/>
+
+      <!-- bar: Baseline 0.074ms -> w=0.074*588.2=43.5 -->
+      <text x="135" y="28" font-size="10" fill="#202124" text-anchor="end">Baseline</text>
+      <rect x="140" y="14" width="44"  height="22" fill="#5f6368" rx="2"/>
+      <text x="188" y="28" font-size="10" fill="#5f6368">0.074 ms</text>
+
+      <!-- bar: Phase 1 0.628ms -> w=0.628*588.2=369.5 -->
+      <text x="135" y="64" font-size="10" fill="#202124" text-anchor="end">Phase 1</text>
+      <rect x="140" y="50" width="370" height="22" fill="#34a853" rx="2"/>
+      <text x="514" y="64" font-size="10" fill="#34a853">0.628 ms  <tspan fill="#ea4335">(+0.554)</tspan></text>
+
+      <!-- bar: Phase 2 0.797ms -> w=0.797*588.2=468.9 -->
+      <text x="135" y="100" font-size="10" fill="#202124" text-anchor="end">Phase 2</text>
+      <rect x="140" y="86" width="469" height="22" fill="#fbbc04" rx="2"/>
+      <text x="613" y="100" font-size="10" fill="#bf8600">0.797 ms  <tspan fill="#ea4335">(+0.723)</tspan></text>
+
+      <!-- bar: Phase 3 0.630ms -> w=0.630*588.2=370.6 -->
+      <text x="135" y="136" font-size="10" fill="#202124" text-anchor="end">Phase 3</text>
+      <rect x="140" y="122" width="371" height="22" fill="#ea4335" rx="2"/>
+      <text x="515" y="136" font-size="10" fill="#ea4335">0.630 ms  <tspan fill="#ea4335">(+0.556)</tspan></text>
+    </svg>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>指標</th>
+        <th class="td-num">Baseline</th>
+        <th class="td-num">Phase 1</th>
+        <th class="td-num">Phase 2</th>
+        <th class="td-num">Phase 3</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>avg RTT</td>
+        <td class="td-num">0.074 ms</td>
+        <td class="td-num">0.628 ms</td>
+        <td class="td-num">0.797 ms</td>
+        <td class="td-num">0.630 ms</td>
+      </tr>
+      <tr style="background:#e8f0fe;">
+        <td><strong>Delta (vs Baseline)</strong></td>
+        <td class="td-num">—</td>
+        <td class="td-num highlight">+0.554 ms</td>
+        <td class="td-num highlight">+0.723 ms</td>
+        <td class="td-num highlight">+0.556 ms</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <!-- ── 4-3 HTTPS TLS Handshake ── -->
+  <h3 style="font-size:14px;color:#202124;margin:24px 0 10px 0;">4-3. HTTPS TLS ハンドシェイク &nbsp;<small style="font-weight:400;color:#5f6368;font-size:12px;">curl, n=50, Phase 3 のみ</small></h3>
+  <table>
+    <thead>
+      <tr>
+        <th>指標</th>
+        <th class="td-num">Baseline (直接)</th>
+        <th class="td-num">Via NFW (TLS検査)</th>
+        <th class="td-num">Delta</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>TCP connect p50</td>
+        <td class="td-num">0.136 ms</td>
+        <td class="td-num">1.463 ms</td>
+        <td class="td-num highlight">+1.327 ms</td>
+      </tr>
+      <tr>
+        <td>TLS handshake p50</td>
+        <td class="td-num">3.146 ms</td>
+        <td class="td-num">4.859 ms</td>
+        <td class="td-num highlight">+1.713 ms</td>
+      </tr>
+      <tr>
+        <td>TLS handshake p95</td>
+        <td class="td-num">3.365 ms</td>
+        <td class="td-num">5.193 ms</td>
+        <td class="td-num highlight">+1.828 ms</td>
+      </tr>
+    </tbody>
+  </table>
+  <div class="callout" style="margin-top:10px;">
+    TLS ハンドシェイクの追加レイテンシー <strong>+1.713 ms (p50)</strong> は、AWS 公式ドキュメントの「シングルミリ秒台」の記述と一致する。
+  </div>
+
+  <!-- ── 4-4 Throughput ── -->
+  <h3 style="font-size:14px;color:#202124;margin:24px 0 10px 0;">4-4. スループット &nbsp;<small style="font-weight:400;color:#5f6368;font-size:12px;">iperf3, 10秒, 単一フロー</small></h3>
+
+  <div class="chart-wrap">
+    <div class="chart-title">受信スループット比較 (Mbps)</div>
+    <!--
+      Baseline=9527, NFW=4800
+      max=10000 -> scale to 420px -> 1Mbps=0.042px
+    -->
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 120"
+         style="width:100%;max-width:560px;display:block;
+                font-family:'IPAGothic','Hiragino Kaku Gothic ProN','Noto Sans JP',sans-serif;">
+
+      <!-- y grid lines -->
+      <line x1="140" y1="10" x2="560" y2="10"  stroke="#e0e0e0" stroke-width="1"/>
+      <line x1="140" y1="31" x2="560" y2="31"  stroke="#f0f0f0" stroke-width="0.7" stroke-dasharray="4,3"/>
+      <line x1="140" y1="52" x2="560" y2="52"  stroke="#f0f0f0" stroke-width="0.7" stroke-dasharray="4,3"/>
+      <line x1="140" y1="73" x2="560" y2="73"  stroke="#f0f0f0" stroke-width="0.7" stroke-dasharray="4,3"/>
+      <line x1="140" y1="94" x2="560" y2="94"  stroke="#e0e0e0" stroke-width="1"/>
+
+      <!-- x-axis labels (Mbps) -->
+      <text x="135" y="97" font-size="9.5" fill="#9aa0a6" text-anchor="end">0</text>
+      <text x="135" y="76" font-size="9.5" fill="#9aa0a6" text-anchor="end">2,500</text>
+      <text x="135" y="55" font-size="9.5" fill="#9aa0a6" text-anchor="end">5,000</text>
+      <text x="135" y="34" font-size="9.5" fill="#9aa0a6" text-anchor="end">7,500</text>
+      <text x="135" y="13" font-size="9.5" fill="#9aa0a6" text-anchor="end">10,000</text>
+      <text x="20"  y="56" font-size="9.5" fill="#5f6368" text-anchor="middle"
+            transform="rotate(-90,20,56)">Mbps</text>
+
+      <!-- Baseline: 9527 Mbps -> h=9527/10000*84=80.0px  y=94-80=14 -->
+      <rect x="180" y="14" width="80" height="80" fill="#1a73e8" rx="3"/>
+      <text x="220" y="11"  font-size="10" fill="#1a73e8" text-anchor="middle" font-weight="700">9,527</text>
+      <text x="220" y="108" font-size="10.5" fill="#202124" text-anchor="middle" font-weight="600">Baseline</text>
+
+      <!-- Delta arrow -->
+      <text x="340" y="56" font-size="22" fill="#ea4335" text-anchor="middle">↓ −50%</text>
+
+      <!-- NFW: 4800 Mbps -> h=4800/10000*84=40.3px  y=94-40.3=53.7 -->
+      <rect x="400" y="54" width="80" height="40" fill="#ea4335" rx="3"/>
+      <text x="440" y="51"  font-size="10" fill="#ea4335" text-anchor="middle" font-weight="700">4,800</text>
+      <text x="440" y="108" font-size="10.5" fill="#202124" text-anchor="middle" font-weight="600">Via NFW</text>
+    </svg>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>計測</th>
+        <th class="td-num">Baseline</th>
+        <th class="td-num">Via NFW</th>
+        <th class="td-num">差分</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>受信スループット</td>
+        <td class="td-num">9,527 Mbps</td>
+        <td class="td-num">4,800 Mbps</td>
+        <td class="td-num highlight">−50%</td>
+      </tr>
+    </tbody>
+  </table>
+  <div class="callout warn" style="margin-top:10px;">
+    単一フロー計測のため、実際のマルチフロー環境では異なる可能性がある。c5.large の ENA は 10 Gbps 対応だが、NFW エンドポイントの処理負荷がボトルネックとなっている。
+  </div>
+</div>
+
+
+<!-- ========================================================
+     5. 考察・まとめ
+     ======================================================== -->
+<div class="section">
+  <div class="section-title"><span class="num">5</span>考察・まとめ</div>
+
+  <ul class="bullet-list">
+    <li>
+      <strong>ステートレスルールのみ（Phase 1）でも TCP RTT p50 で +0.8ms</strong> の追加レイテンシーが発生。
+      NFW エンドポイントを経由するだけで生じる固定コストであり、ルールの複雑さに依存しない。
+    </li>
+    <li>
+      <strong>ステートフルルール追加（Phase 2）は p50/p95 が微減</strong>（測定誤差の範囲内）。ただし
+      <strong style="color:var(--red);">p99 が 3.5ms と大幅に増加</strong>。
+      ステートフル処理による初回フロー検査コストが尾部レイテンシーに影響している。
+    </li>
+    <li>
+      <strong>TLS 検査（Phase 3）の TCP RTT は Phase 1/2 と同程度</strong>。追加の TCP レイテンシーはほぼなし。
+      ただし <strong>TLS ハンドシェイクが +1.7ms (p50)</strong>。
+      AWS 公式の「シングルミリ秒台」という記述と一致する実測値。
+    </li>
+    <li>
+      <strong>スループットは NFW 経由で約半減（~4.8 Gbps）</strong>。
+      c5.large の ENA は 10 Gbps 対応だが、NFW エンドポイントの処理負荷でボトルネックが生じている。
+      単一フロー測定のため、実際のマルチフロー環境では異なる可能性がある。
+    </li>
+  </ul>
+
+  <div class="callout key" style="margin-top:16px;">
+    <strong>口頭説明用ワンライナー:</strong><br>
+    「実測では、ステートレスのみで +0.8ms、ステートフル追加でも p50 は同程度（p99 は +3.5ms）、
+    TLS 検査の TCP RTT への追加影響はほぼなし、TLS ハンドシェイクは +1.7ms でした。」
+  </div>
+
+  <!-- Summary table -->
+  <table style="margin-top:16px;">
+    <thead>
+      <tr>
+        <th>Phase</th>
+        <th class="td-num">TCP RTT p50 追加</th>
+        <th class="td-num">TCP RTT p99 追加</th>
+        <th class="td-num">ICMP avg 追加</th>
+        <th class="td-num">TLS HS p50 追加</th>
+        <th class="td-num">スループット</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><span class="phase-badge ph0">Phase 0</span> Baseline</td>
+        <td class="td-num">—</td>
+        <td class="td-num">—</td>
+        <td class="td-num">—</td>
+        <td class="td-num">—</td>
+        <td class="td-num">9,527 Mbps</td>
+      </tr>
+      <tr>
+        <td><span class="phase-badge ph1">Phase 1</span> ステートレス</td>
+        <td class="td-num highlight">+0.800 ms</td>
+        <td class="td-num">+1.200 ms</td>
+        <td class="td-num">+0.554 ms</td>
+        <td class="td-num">—</td>
+        <td class="td-num">4,800 Mbps</td>
+      </tr>
+      <tr>
+        <td><span class="phase-badge ph2">Phase 2</span> ステートフル</td>
+        <td class="td-num highlight">+0.600 ms</td>
+        <td class="td-num highlight" style="color:var(--red)">+3.200 ms</td>
+        <td class="td-num">+0.723 ms</td>
+        <td class="td-num">—</td>
+        <td class="td-num">—</td>
+      </tr>
+      <tr>
+        <td><span class="phase-badge ph3">Phase 3</span> TLS 検査</td>
+        <td class="td-num highlight">+0.700 ms</td>
+        <td class="td-num">+1.300 ms</td>
+        <td class="td-num">+0.556 ms</td>
+        <td class="td-num highlight">+1.713 ms</td>
+        <td class="td-num">—</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+
+<!-- ========================================================
+     6. 注意事項
+     ======================================================== -->
+<div class="section">
+  <div class="section-title"><span class="num">6</span>注意事項</div>
+  <ul class="bullet-list">
+    <li>nping の RTT 精度は 0.1ms 単位のため、p50/p95 の分解能に限界がある（最小分解能 0.1ms）。</li>
+    <li>単一フロー計測のため、マルチフロー環境での結果は異なる場合がある（スループットは特に影響が大きい）。</li>
+    <li>計測は単一の計測セッション（各フェーズ1回）のため、統計的信頼性には限界がある。複数回の計測による平均化が推奨される。</li>
+    <li>NFW エンドポイントや EC2 インスタンスのリソース状況によって結果が変動する場合がある。</li>
+  </ul>
+</div>
+
+
+<!-- ========================================================
+     FOOTER
+     ======================================================== -->
+<div class="report-footer">
+  <span>AWS Network Firewall レイテンシーベンチマーク 実測レポート</span>
+  <span>作成日: 2026年3月19日 &nbsp;|&nbsp; リージョン: ap-northeast-1 &nbsp;|&nbsp; c5.large</span>
+</div>
+
+</div><!-- /page -->
+</body>
+</html>

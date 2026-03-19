@@ -1,5 +1,8 @@
 node_modules/
 dist/
+outputs.json
+cdk.out/
+cdk.context.json
 .env
 .env.local
 *.log
