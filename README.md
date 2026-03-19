@@ -1,128 +1,190 @@
-# AWS Network Firewall レイテンシーベンチマーク
+# AWS Network Firewall Latency Benchmark
 
-## 目的
+Measure the latency overhead added by AWS Network Firewall at each inspection level: stateless rules, stateful rules (Suricata), and TLS inspection. All infrastructure is defined in CDK and can be reproduced end-to-end in about 30 minutes.
 
-Network Firewall を経由した場合のレイテンシー増加を実測し、
-以下の各段階での追加レイテンシーを数値化する。
+## Architecture
 
-| テスト段階 | 内容 | 期待される追加レイテンシー |
+![Architecture Diagram](docs/arch-diagram.png)
+
+```
+VPC 10.0.0.0/16  (single AZ)
+
+  Client Subnet 10.0.0.0/24          Firewall Subnet 10.0.1.0/24     Server Subnet 10.0.2.0/24
+  ┌─────────────────────────┐         ┌────────────────────────┐      ┌──────────────────────┐
+  │  ClientInst             │──Route A▶│  NFW Endpoint          │─────▶│  ServerInst          │
+  │  BaselineInst (Phase 0) │─Route B─▶│  (direct, no firewall) │      │  (iperf3 / nginx)    │
+  └─────────────────────────┘         └────────────────────────┘      └──────────────────────┘
+
+Route A (Phase 1/2/3): ClientInst → NFW Endpoint → ServerInst
+Route B (Phase 0):     ClientInst → BaselineInst  (same subnet, no firewall)
+```
+
+All instances are in private isolated subnets (no NAT). Access is via SSM Session Manager using VPC interface endpoints.
+
+## Test Phases
+
+| Phase | Configuration | Measured Overhead (p50 TCP RTT) |
 |---|---|---|
-| Phase 0 | ベースライン（同一サブネット直接通信） | 基準値 |
-| Phase 1 | ステートレスルールのみ（pass all） | サブms〜1ms |
-| Phase 2 | ステートフルルール追加（Suricata pass） | 数ms |
-| Phase 3 | TLS検査有効化 | 初回接続でシングルms台追加 |
+| Phase 0 | Baseline — same subnet direct | reference (0 ms added) |
+| Phase 1 | Stateless rules only (pass all) | +0.8 ms |
+| Phase 2 | Stateful Suricata rules (pass all) | +0.6 ms p50 / +3.5 ms p99 |
+| Phase 3 | TLS inspection enabled | +1.7 ms per TLS handshake |
 
-## アーキテクチャ
+## Prerequisites
 
-```
-同一 AZ 内:
+- [Node.js](https://nodejs.org/) 18 or later
+- [AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) configured with a profile that has permissions to deploy VPC, EC2, Network Firewall, ACM, and CloudWatch resources
+- [AWS CDK v2](https://docs.aws.amazon.com/cdk/v2/guide/getting_started.html): `npm install -g aws-cdk`
+- `jq` (used by scripts): `brew install jq` / `apt install jq`
 
-┌──────────────┐     ┌──────────────────┐     ┌──────────────┐
-│ Client       │     │ Firewall Subnet  │     │ Server       │
-│ Subnet       │────▶│ (NFW Endpoint)   │────▶│ Subnet       │
-│              │     │                  │     │              │
-│ ClientInst   │     │                  │     │ ServerInst   │
-│ BaselineInst │     │                  │     │              │
-└──────────────┘     └──────────────────┘     └──────────────┘
+Export your AWS profile before running any command:
 
-経路A: ClientInst → NFW Endpoint → ServerInst  (Firewall経由)
-経路B: ClientInst → BaselineInst              (同一サブネット直接)
+```bash
+export AWS_PROFILE=your-profile
+export AWS_REGION=ap-northeast-1   # or your preferred region
 ```
 
-## デプロイ手順
+## Step-by-Step
 
-### 1. CDKデプロイ
+### 1. Install dependencies and bootstrap
 
 ```bash
 npm install
-# --outputs-file でCfnOutputをファイルに保存する (後続スクリプトが参照する)
-npx cdk deploy --outputs-file outputs.json
+npx cdk bootstrap   # only needed once per account/region
 ```
 
-`outputs.json` はプロジェクトルートに生成される。`.gitignore` に追加すること。
+### 2. Deploy the stack
 
-### 2. ルートテーブル設定
+```bash
+npx cdk deploy --outputs-file outputs.json --require-approval never
+```
 
-CDKではNFWエンドポイントIDをデプロイ時に取得できないため、デプロイ後に手動設定する。
+`outputs.json` is created at the project root (gitignored). All subsequent scripts read it automatically.
+
+### 3. Configure route tables
+
+CDK cannot obtain the NFW endpoint ID at deploy time, so routes must be added after deployment:
 
 ```bash
 ./scripts/setup-routes.sh
-# outputs.json を自動参照。パスを変えたい場合は引数で渡す:
+# Pass a custom outputs.json path if needed:
 # ./scripts/setup-routes.sh /path/to/outputs.json
 ```
 
-### 3. ベンチマーク実行
+This creates two routes:
+- Client subnet RT → `10.0.2.0/24` via NFW endpoint
+- Server subnet RT → `10.0.0.0/24` via NFW endpoint
+
+### 4. Transfer `bench.sh` to the client instance
+
+The instances have no internet access. Use SSM to copy the script via base64:
 
 ```bash
-# outputs.json からIPを取得
-SERVER_IP=$(jq -r '.NfwLatencyBenchStack.ServerPrivateIp' outputs.json)
-BASELINE_IP=$(jq -r '.NfwLatencyBenchStack.BaselinePrivateIp' outputs.json)
 CLIENT_ID=$(jq -r '.NfwLatencyBenchStack.ClientInstanceId' outputs.json)
 
-# bench.sh を SSM 経由で ClientInstance に転送して実行
+# Encode and send
+ENCODED=$(base64 -w0 bench.sh)
 aws ssm send-command \
   --instance-ids "${CLIENT_ID}" \
   --document-name "AWS-RunShellScript" \
   --parameters "commands=[
-    'curl -o /tmp/bench.sh https://...',
-    'chmod +x /tmp/bench.sh',
-    'sudo /tmp/bench.sh ${SERVER_IP} ${BASELINE_IP}'
-  ]"
-
-# または SSM セッションで直接実行
-aws ssm start-session --target "${CLIENT_ID}"
-# セッション内で:
-# sudo ./bench.sh <SERVER_IP> <BASELINE_IP>
+    'echo ${ENCODED} | base64 -d > /tmp/bench.sh',
+    'chmod +x /tmp/bench.sh'
+  ]" \
+  --query 'Command.CommandId' --output text
 ```
 
-## テストフェーズの切り替え
+### 5. Run benchmarks for each phase
+
+For each phase, switch the firewall policy and then run the benchmark.
 
 ```bash
-./scripts/switch-phase.sh 1   # ステートレスのみ
-./scripts/switch-phase.sh 2   # ステートフル追加
-./scripts/switch-phase.sh 3   # TLS検査 (手順を案内)
-# outputs.json を自動参照。パスを変えたい場合:
-# ./scripts/switch-phase.sh 1 /path/to/outputs.json
+SERVER_IP=$(jq -r '.NfwLatencyBenchStack.ServerPrivateIp' outputs.json)
+BASELINE_IP=$(jq -r '.NfwLatencyBenchStack.BaselinePrivateIp' outputs.json)
+CLIENT_ID=$(jq -r '.NfwLatencyBenchStack.ClientInstanceId' outputs.json)
+
+# Open an SSM session on the client instance
+aws ssm start-session --target "${CLIENT_ID}"
 ```
 
-切り替え後は **30秒の反映待機**が入るので、完了メッセージを確認してから `bench.sh` を実行する。
+Inside the session:
 
-## 実行フロー
+```bash
+# Phase 1 — stateless rules only
+exit  # back to local shell first
+./scripts/switch-phase.sh 1   # waits 30 s for policy to propagate
+aws ssm start-session --target "${CLIENT_ID}"
+sudo /tmp/bench.sh <SERVER_IP> <BASELINE_IP>
 
+# Phase 2 — stateful Suricata rules
+exit
+./scripts/switch-phase.sh 2
+aws ssm start-session --target "${CLIENT_ID}"
+sudo /tmp/bench.sh <SERVER_IP> <BASELINE_IP>
+
+# Phase 3 — TLS inspection (generates cert, imports to ACM, creates TLS config)
+exit
+./scripts/switch-phase.sh 3
+aws ssm start-session --target "${CLIENT_ID}"
+sudo /tmp/bench.sh <SERVER_IP> <BASELINE_IP>
 ```
-1. npx cdk deploy --outputs-file outputs.json
-2. ./scripts/setup-routes.sh
-3. ./scripts/switch-phase.sh 1  →  bench.sh
-4. ./scripts/switch-phase.sh 2  →  bench.sh
-5. (オプション) ./scripts/switch-phase.sh 3  →  bench.sh
-6. npx cdk destroy
+
+`switch-phase.sh` reads `outputs.json` automatically. To use a different file:
+
+```bash
+./scripts/switch-phase.sh 1 /path/to/outputs.json
 ```
 
-## 計測項目
+### 6. Destroy all resources
 
-| 項目 | ツール | 精度 |
+```bash
+npx cdk destroy
+```
+
+Note: ACM certificates and TLS inspection configurations created by `switch-phase.sh 3` are not managed by CDK and must be deleted manually from the AWS console or CLI if needed.
+
+## Measurement Details
+
+| Metric | Tool | Notes |
 |---|---|---|
-| TCP RTT (p50/p95/p99) | hping3 --tcp -p 5201 -c 100 | μs単位 (メイン計測) |
-| ICMP RTT (avg) | ping -c 100 | ms単位 (参考値) |
-| スループット + リトランスミット | iperf3 -t 10 -J | - |
-| HTTPS TCP/TLS接続時間 (p50/p95/p99) | curl | ms単位 (Phase 3) |
+| TCP RTT p50/p95/p99 | `nping --tcp -p 5201 -c 100` | Primary metric; μs-level precision |
+| ICMP RTT avg | `ping -c 100` | Reference only |
+| Throughput + retransmits | `iperf3 -t 10 -J` | Checks for throughput impact |
+| HTTPS TLS handshake p50/p95/p99 | `curl` (50 reps) | Phase 3 only; auto-detected |
 
-## コスト見積もり
+`bench.sh` auto-selects `nping` (from the `nmap` package, pre-installed by UserData) and falls back to `hping3` if available. It prints a comparison table with absolute values and delta vs. baseline.
 
-| リソース | 単価（東京リージョン） |
+## Cost Estimate (ap-northeast-1)
+
+| Resource | Rate |
 |---|---|
 | c5.large × 3 | ~$0.108/h × 3 = $0.324/h |
-| NFWエンドポイント | $0.395/h |
-| VPCエンドポイント × 3 (SSM用) | ~$0.014/h × 3 = $0.042/h |
-| **合計** | **約 $0.76/h** |
+| NFW endpoint | $0.395/h |
+| VPC endpoints × 3 (SSM) | ~$0.014/h × 3 = $0.042/h |
+| **Total** | **~$0.76/h** |
 
-**2時間で完了想定: 約 $1.50。終わったら必ず `npx cdk destroy` すること。**
+Running all three phases takes about 2 hours: **estimated total ~$1.50**. Destroy resources promptly when done.
 
-## 参考リンク
+## Repository Structure
 
-- [TLS inspection configuration - AWS Security Blog](https://aws.amazon.com/blogs/security/tls-inspection-configuration-for-encrypted-traffic-and-aws-network-firewall/)
-  - 公式で唯一の具体的数値: TLS検査時のシングルms台レイテンシー
+```
+.
+├── bin/
+│   └── nfw-latency-bench.ts      # CDK entrypoint
+├── lib/
+│   └── nfw-latency-bench-stack.ts # CDK stack (VPC, EC2, NFW, endpoints)
+├── scripts/
+│   ├── setup-routes.sh            # Post-deploy route table configuration
+│   └── switch-phase.sh            # Firewall policy switcher (Phase 1/2/3)
+├── bench.sh                       # Benchmark script (runs on client instance)
+├── docs/
+│   ├── arch-diagram.png           # Architecture diagram
+│   └── nfw-latency-report.html    # Benchmark report with charts
+└── outputs.json                   # CDK outputs (gitignored, auto-generated)
+```
+
+## References
+
+- [TLS inspection configuration — AWS Security Blog](https://aws.amazon.com/blogs/security/tls-inspection-configuration-for-encrypted-traffic-and-aws-network-firewall/)
 - [Network Firewall FAQ](https://aws.amazon.com/network-firewall/faqs/)
-  - FAQ: 独自テスト推奨の記載あり
 - [Deployment models for AWS Network Firewall](https://aws.amazon.com/blogs/networking-and-content-delivery/deployment-models-for-aws-network-firewall/)
-  - 分散型/集中型/コンバインドの比較
