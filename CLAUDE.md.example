@@ -1,0 +1,39 @@
+# CLAUDE.md（テンプレート）
+
+このファイルを `CLAUDE.md` にリネームし、PJに合わせて編集してください。
+
+## Project
+<!-- プロジェクト名と概要。詳細ドキュメントへの参照 -->
+プロジェクト名。詳細は @docs/requirements.md
+
+## Architecture
+<!-- アーキテクチャ概要。詳細ドキュメントへの参照 -->
+詳細は @docs/design/architecture.md
+
+## Repository Structure
+<!-- 主要ディレクトリの説明 -->
+- src/: アプリケーションコード
+- docs/: 仕様ドキュメント（第一ソース）
+
+## Commands
+<!-- 頻出コマンド。エージェントがすぐ実行できるように -->
+- Build: npm run build
+- Run tests: npm test
+- Lint: npm run lint
+- Type check: npm run typecheck
+
+## Code Style
+- TypeScript strict mode. No `any`.
+- ES modules (import/export), not CommonJS.
+- Arrow functions preferred.
+- Linting/formatting は ESLint + Prettier で強制。
+
+## Git
+- Conventional Commits (feat:, fix:, chore:, docs:, refactor:, test:)
+- main/dev への直push禁止。必ず feature ブランチからPR
+- 詳細は @.kiro/steering/git-conventions.md と @.kiro/steering/branch-strategy.md を参照
+
+## IMPORTANT
+<!-- PJ固有の絶対ルール。本番環境の制約、削除禁止リソース等 -->
+- 本番環境（prod）への直接操作禁止
+- 設計判断は ADR として docs/decisions/ に記録すること

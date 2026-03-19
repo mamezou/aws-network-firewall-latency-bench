@@ -1,0 +1,13 @@
+{
+  "enabled": false,
+  "name": "Auto Commit on Task Complete",
+  "version": "1.0.0",
+  "description": "Kiroのタスク完了時に自動でgit commitする",
+  "when": {
+    "type": "agentStop"
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "変更されたファイルをすべてステージングし、Conventional Commits形式のコミットメッセージを生成してコミットする。変更内容を分析して適切なtype（feat/fix/docs/refactor/test/chore）を選択する。"
+  }
+}

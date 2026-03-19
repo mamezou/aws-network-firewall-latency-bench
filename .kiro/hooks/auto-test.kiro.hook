@@ -1,0 +1,13 @@
+{
+  "name": "Auto Test on Source Change",
+  "version": "1.0.0",
+  "description": "ソースコード変更時に関連するテストを自動実行する。patterns はPJ構成に合わせて変更すること（例: frontend/, functions/, lib/ 等）",
+  "when": {
+    "type": "fileEdited",
+    "patterns": ["src/**/*.ts", "src/**/*.tsx", "lib/**/*.ts", "functions/**/*.ts"]
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "変更されたファイルに対応するテストファイルが存在するか確認する。存在する場合は npx vitest run <テストファイル> を実行する。テストが失敗した場合は失敗内容を報告する。対応するテストファイルが存在しない場合は何もしない。"
+  }
+}
