@@ -654,6 +654,13 @@
   <div class="callout key" style="margin-top:12px;">
     Phase 2 の p99 が <strong>3.500 ms</strong> と突出して高い。ステートフル処理による初回フロー検査コストが尾部レイテンシーに影響している。
   </div>
+  <div class="callout warn" style="margin-top:8px;">
+    <strong>⚠ Phase 1 と Phase 2 の p50 逆転について:</strong><br>
+    Phase 1 (0.900 ms) &gt; Phase 2 (0.700 ms) という結果はステートフルルールの方が速いことを意味しない。
+    nping の RTT 分解能は <strong>0.1 ms 単位</strong>であり、差分 0.2 ms はツールの最小刻み幅 2 つ分に過ぎない。
+    本来ステートフル処理のコストはゼロより大きいため、この差は<strong>測定誤差・タイミングノイズの範囲内</strong>と判断する。
+    厳密な比較には複数セッションの平均化と高分解能ツール（hping3 など）が必要。
+  </div>
 
   <!-- ── 4-2 ICMP RTT ── -->
   <h3 style="font-size:14px;color:#202124;margin:24px 0 10px 0;">4-2. ICMP RTT &nbsp;<small style="font-weight:400;color:#5f6368;font-size:12px;">ping, n=100, 0.1秒間隔</small></h3>
@@ -779,8 +786,12 @@
       </tr>
     </tbody>
   </table>
-  <div class="callout" style="margin-top:10px;">
-    TLS ハンドシェイクの追加レイテンシー <strong>+1.713 ms (p50)</strong> は、AWS 公式ドキュメントの「シングルミリ秒台」の記述と一致する。
+  <div class="callout key" style="margin-top:10px;">
+    <strong>✓ 自前計測で AWS 公式を裏付け:</strong><br>
+    TLS ハンドシェイクの追加レイテンシー <strong>+1.713 ms (p50)</strong> は、
+    <a href="https://aws.amazon.com/blogs/security/tls-inspection-configuration-for-encrypted-traffic-and-aws-network-firewall/" style="color:var(--blue);">AWS Security Blog</a>
+    が述べる「シングルミリ秒台 (single-digit milliseconds)」と一致する。
+    公式ドキュメントに具体的な数値がない中、自前の実測でこれを検証できた点は本ベンチマークの主要な成果の一つ。
   </div>
 
   <!-- ── 4-4 Throughput ── -->
@@ -846,7 +857,11 @@
     </tbody>
   </table>
   <div class="callout warn" style="margin-top:10px;">
-    単一フロー計測のため、実際のマルチフロー環境では異なる可能性がある。c5.large の ENA は 10 Gbps 対応だが、NFW エンドポイントの処理負荷がボトルネックとなっている。
+    <strong>⚠ この数値の読み方に注意:</strong><br>
+    これは <strong>単一 TCP フロー</strong> の計測値であり、「NFW を入れるとスループットが半減する」という一般則ではない。
+    iperf3 のデフォルト（<code>-P 1</code>）は単一フローのため、NFW の分散処理ボリュームとは異なる条件になる。
+    本番環境では複数フローが並走するため、<code>iperf3 -P 4</code> 等のマルチフロー計測で大きく改善する可能性がある。
+    スループット要件がある場合は、<strong>実際のトラフィックパターンで個別に検証すること</strong>を強く推奨する。
   </div>
 </div>
 
@@ -863,19 +878,19 @@
       NFW エンドポイントを経由するだけで生じる固定コストであり、ルールの複雑さに依存しない。
     </li>
     <li>
-      <strong>ステートフルルール追加（Phase 2）は p50/p95 が微減</strong>（測定誤差の範囲内）。ただし
+      <strong>ステートフルルール追加（Phase 2）は p50/p95 が微減</strong>（nping 分解能 0.1ms 以内の差のため測定誤差の範囲内、有意差なし）。ただし
       <strong style="color:var(--red);">p99 が 3.5ms と大幅に増加</strong>。
       ステートフル処理による初回フロー検査コストが尾部レイテンシーに影響している。
     </li>
     <li>
       <strong>TLS 検査（Phase 3）の TCP RTT は Phase 1/2 と同程度</strong>。追加の TCP レイテンシーはほぼなし。
       ただし <strong>TLS ハンドシェイクが +1.7ms (p50)</strong>。
-      AWS 公式の「シングルミリ秒台」という記述と一致する実測値。
+      AWS 公式 Security Blog の「シングルミリ秒台 (single-digit milliseconds)」という記述を<strong>自前計測で裏付けた</strong>点は本ベンチマークの主要な成果。
     </li>
     <li>
-      <strong>スループットは NFW 経由で約半減（~4.8 Gbps）</strong>。
-      c5.large の ENA は 10 Gbps 対応だが、NFW エンドポイントの処理負荷でボトルネックが生じている。
-      単一フロー測定のため、実際のマルチフロー環境では異なる可能性がある。
+      <strong>スループットは単一フロー計測で約半減（9.5→4.8 Gbps）</strong>。
+      ただしこれは <code>iperf3 -P 1</code>（単一フロー）の結果であり、マルチフロー環境での値ではない。
+      本番トラフィックでの影響は個別計測が必要（<code>iperf3 -P 4</code> 等を推奨）。
     </li>
   </ul>
 
