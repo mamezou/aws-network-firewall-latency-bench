@@ -27,8 +27,10 @@ All instances are in private isolated subnets (no NAT). Access is via SSM Sessio
 |---|---|---|
 | Phase 0 | Baseline — same subnet direct | reference (0 ms added) |
 | Phase 1 | Stateless rules only (pass all) | +0.8 ms |
-| Phase 2 | Stateful Suricata rules (pass all) | +0.6 ms p50 / +3.5 ms p99 |
+| Phase 2 | Stateful Suricata rules (pass all) | +0.6 ms p50 / +3.5 ms p99 ※ |
 | Phase 3 | TLS inspection enabled | +1.7 ms per TLS handshake |
+
+> ※ Phase 1 と Phase 2 の p50 差は nping の分解能（0.1ms）以内であり、ステートレス vs ステートフルの差は本計測条件（同一クライアントからの繰り返し接続）では比較できなかった。
 
 ## Prerequisites
 

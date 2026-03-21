@@ -9,3 +9,6 @@ cdk.context.json
 .DS_Store
 Thumbs.db
 reviews/
+.claude/
+.vscode/
+CLAUDE.md*
