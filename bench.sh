@@ -16,7 +16,7 @@
 #   Phase 3: TLS検査有効化                  → SERVER_IP / BASELINE_IP 宛
 #
 # 各フェーズで以下を計測:
-#   - hping3 TCP RTT (p50/p95/p99) ← メイン計測
+#   - TCP RTT (p50/p95/p99、nping。nping がなければ hping3) ← メイン計測
 #   - ping ICMP RTT (avg)
 #   - iperf3 スループット + リトランスミット
 #

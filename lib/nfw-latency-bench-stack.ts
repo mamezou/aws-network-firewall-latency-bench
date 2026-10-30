@@ -31,7 +31,9 @@ import * as logs from "aws-cdk-lib/aws-logs";
  *
  * 【Phase 3 TLS検査セットアップ】
  *   TLS inspection configurationはデプロイ後に scripts/switch-phase.sh 3 が自動作成する。
- *   (自己署名証明書の生成 → ACMインポート → TLS設定作成 → ポリシー関連付け)
+ *   (自己署名証明書の生成 → ACMインポート → TLS設定作成 → TLS検査付きポリシーの作成と関連付け)
+ *   TLS検査の設定は既存のポリシーへ後から付けられないため、ポリシーごとスクリプトで作る。
+ *   スクリプトで作ったものは scripts/cleanup.sh が消す。
  */
 export class NfwLatencyBenchStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
@@ -152,10 +154,16 @@ export class NfwLatencyBenchStack extends cdk.Stack {
     // ========================================
     // EC2インスタンス × 3 (c5.large: ENA対応でネットワーク性能安定)
     // ========================================
+    // 計測結果は c5.large で取った。インスタンスタイプが制限されたアカウントでは
+    // `npx cdk deploy -c instanceType=t3.medium` のように変えられる(計測値は比べられなくなる)
+    const instanceType = new ec2.InstanceType(
+      this.node.tryGetContext("instanceType") ?? "c5.large"
+    );
+
     const clientInstance = new ec2.Instance(this, "ClientInstance", {
       vpc,
       vpcSubnets: clientSubnets,
-      instanceType: ec2.InstanceType.of(ec2.InstanceClass.C5, ec2.InstanceSize.LARGE),
+      instanceType: instanceType,
       machineImage: ec2.MachineImage.latestAmazonLinux2023(),
       securityGroup: benchSg,
       role: instanceRole,
@@ -165,7 +173,7 @@ export class NfwLatencyBenchStack extends cdk.Stack {
     const serverInstance = new ec2.Instance(this, "ServerInstance", {
       vpc,
       vpcSubnets: serverSubnets,
-      instanceType: ec2.InstanceType.of(ec2.InstanceClass.C5, ec2.InstanceSize.LARGE),
+      instanceType: instanceType,
       machineImage: ec2.MachineImage.latestAmazonLinux2023(),
       securityGroup: benchSg,
       role: instanceRole,
@@ -176,7 +184,7 @@ export class NfwLatencyBenchStack extends cdk.Stack {
     const baselineInstance = new ec2.Instance(this, "BaselineInstance", {
       vpc,
       vpcSubnets: clientSubnets,
-      instanceType: ec2.InstanceType.of(ec2.InstanceClass.C5, ec2.InstanceSize.LARGE),
+      instanceType: instanceType,
       machineImage: ec2.MachineImage.latestAmazonLinux2023(),
       securityGroup: benchSg,
       role: instanceRole,
@@ -299,37 +307,6 @@ export class NfwLatencyBenchStack extends cdk.Stack {
       }
     );
 
-    // Phase 3用ポリシー (STRICT_ORDER + TLS inspection)
-    // TLS inspection configuration ARN はデプロイ後に switch-phase.sh 3 が設定する。
-    // (自己署名証明書 → ACMインポート → TLS設定作成 → このポリシーを更新して関連付け)
-    const firewallPolicyPhase3 = new networkfirewall.CfnFirewallPolicy(
-      this,
-      "BenchFwPolicyPhase3",
-      {
-        firewallPolicyName: "bench-fw-policy-phase3",
-        firewallPolicy: {
-          statelessDefaultActions: ["aws:forward_to_sfe"],
-          statelessFragmentDefaultActions: ["aws:forward_to_sfe"],
-          statelessRuleGroupReferences: [
-            {
-              resourceArn: statelessRuleGroup.attrRuleGroupArn,
-              priority: 1,
-            },
-          ],
-          statefulEngineOptions: {
-            ruleOrder: "STRICT_ORDER",
-          },
-          statefulRuleGroupReferences: [
-            {
-              resourceArn: statefulRuleGroupStrict.attrRuleGroupArn,
-              priority: 1,
-            },
-          ],
-          // tlsInspectionConfigurationArn は switch-phase.sh 3 で追加
-        },
-      }
-    );
-
     // Network Firewall 本体 (Phase 1/2 ポリシーで起動)
     const firewall = new networkfirewall.CfnFirewall(this, "BenchFirewall", {
       firewallName: "bench-nfw",
@@ -339,6 +316,7 @@ export class NfwLatencyBenchStack extends cdk.Stack {
         subnetId: id,
       })),
     });
+
 
     // フローログを CloudWatch Logs に出力 (retention: 1 week)
     const fwLogGroup = new logs.LogGroup(this, "FwLogGroup", {
@@ -406,10 +384,6 @@ export class NfwLatencyBenchStack extends cdk.Stack {
     new cdk.CfnOutput(this, "FirewallPolicyArn", {
       value: firewallPolicy.attrFirewallPolicyArn,
       description: "Phase 1/2 用ポリシー ARN (switch-phase.sh で使用)",
-    });
-    new cdk.CfnOutput(this, "Phase3FirewallPolicyArn", {
-      value: firewallPolicyPhase3.attrFirewallPolicyArn,
-      description: "Phase 3 用ポリシー ARN (switch-phase.sh 3 で使用)",
     });
     new cdk.CfnOutput(this, "StatelessRuleGroupArn", {
       value: statelessRuleGroup.attrRuleGroupArn,

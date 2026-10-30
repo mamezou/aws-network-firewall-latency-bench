@@ -12,7 +12,9 @@
 #   Phase 2: ステートフルルール追加 (statelessDefaultActions=aws:forward_to_sfe)
 #   Phase 3: TLS検査有効化
 #             自己署名証明書を生成 → ACMインポート → TLS inspection config作成
-#             → bench-fw-policy-phase3 を更新してファイアウォールに関連付け
+#             → TLS検査付きのポリシー bench-fw-policy-tls を作ってファイアウォールに関連付け
+#             (TLS検査の設定は既存のポリシーへ後から付けられないため、ポリシーごと作る。
+#              このポリシーは scripts/cleanup.sh が消す)
 #
 # ⚠️  フェーズ切り替え後、このスクリプトが30秒待機してから終了する
 # =============================================================
@@ -32,7 +34,6 @@ STACK_NAME="NfwLatencyBenchStack"
 FIREWALL_NAME="bench-nfw"
 
 POLICY_ARN=$(jq -r ".${STACK_NAME}.FirewallPolicyArn" "${OUTPUTS_FILE}")
-PHASE3_POLICY_ARN=$(jq -r ".${STACK_NAME}.Phase3FirewallPolicyArn" "${OUTPUTS_FILE}")
 STATELESS_RG_ARN=$(jq -r ".${STACK_NAME}.StatelessRuleGroupArn" "${OUTPUTS_FILE}")
 STATEFUL_RG_ARN=$(jq -r ".${STACK_NAME}.StatefulRuleGroupArn" "${OUTPUTS_FILE}")
 STRICT_STATEFUL_RG_ARN=$(jq -r ".${STACK_NAME}.StrictStatefulRuleGroupArn" "${OUTPUTS_FILE}")
@@ -119,7 +120,8 @@ case $PHASE in
     openssl req -x509 -nodes -newkey rsa:2048 -days 365 \
       -keyout "${CERT_KEY}" \
       -out "${CERT_CRT}" \
-      -subj "/CN=bench-server" 2>/dev/null
+      -subj "/CN=bench-server" \
+      -addext "subjectAltName=DNS:bench-server" 2>/dev/null
     echo "  OK: ${CERT_CRT}"
 
     # 2. ACMにインポート (既存があれば再インポート)
@@ -170,44 +172,47 @@ case $PHASE in
         --update-token "${TLS_UPDATE_TOKEN}" \
         --tls-inspection-configuration "${TLS_CONFIG_BODY}" \
         --tls-inspection-configuration-name "${TLS_CONFIG_NAME}" \
-        --query 'TlsInspectionConfigurationResponse.TlsInspectionConfigurationArn' \
+        --query 'TLSInspectionConfigurationResponse.TLSInspectionConfigurationArn' \
         --output text)
     else
       TLS_CONFIG_ARN=$(aws network-firewall create-tls-inspection-configuration \
         --tls-inspection-configuration-name "${TLS_CONFIG_NAME}" \
         --tls-inspection-configuration "${TLS_CONFIG_BODY}" \
-        --query 'TlsInspectionConfigurationResponse.TlsInspectionConfigurationArn' \
+        --query 'TLSInspectionConfigurationResponse.TLSInspectionConfigurationArn' \
         --output text)
     fi
     echo "  TLS Config ARN: ${TLS_CONFIG_ARN}"
 
-    # 4. bench-fw-policy-phase3 に TLS inspection config を追加して更新
-    echo "[4/5] bench-fw-policy-phase3 を TLS inspection config で更新..."
-    PHASE3_UPDATE_TOKEN=$(aws network-firewall describe-firewall-policy \
-      --firewall-policy-arn "${PHASE3_POLICY_ARN}" \
-      --query 'UpdateToken' --output text)
-    aws network-firewall update-firewall-policy \
-      --firewall-policy-arn "${PHASE3_POLICY_ARN}" \
-      --update-token "${PHASE3_UPDATE_TOKEN}" \
-      --firewall-policy "{
-        \"StatelessDefaultActions\": [\"aws:forward_to_sfe\"],
-        \"StatelessFragmentDefaultActions\": [\"aws:forward_to_sfe\"],
-        \"StatelessRuleGroupReferences\": [{
-          \"ResourceArn\": \"${STATELESS_RG_ARN}\",
-          \"Priority\": 1
-        }],
-        \"StatefulEngineOptions\": {\"RuleOrder\": \"STRICT_ORDER\"},
-        \"StatefulRuleGroupReferences\": [{
-          \"ResourceArn\": \"${STRICT_STATEFUL_RG_ARN}\",
-          \"Priority\": 1
-        }],
-        \"TLSInspectionConfigurationArn\": \"${TLS_CONFIG_ARN}\"
-      }" \
-      --query 'FirewallPolicyResponse.FirewallPolicyStatus' --output text
+    # 4. TLS検査付きのポリシーを作る(既にあれば使う)
+    #    TLS検査の設定は既存のポリシーを更新して追加できないため、作るときに付ける
+    echo "[4/5] TLS検査付きのポリシー bench-fw-policy-tls を用意..."
+    TLS_POLICY_NAME="bench-fw-policy-tls"
+    TLS_POLICY_ARN=$(aws network-firewall list-firewall-policies \
+      --query "FirewallPolicies[?Name=='${TLS_POLICY_NAME}'].Arn | [0]" --output text)
+    if [ "${TLS_POLICY_ARN}" = "None" ] || [ -z "${TLS_POLICY_ARN}" ]; then
+      TLS_POLICY_ARN=$(aws network-firewall create-firewall-policy \
+        --firewall-policy-name "${TLS_POLICY_NAME}" \
+        --firewall-policy "{
+          \"StatelessDefaultActions\": [\"aws:forward_to_sfe\"],
+          \"StatelessFragmentDefaultActions\": [\"aws:forward_to_sfe\"],
+          \"StatelessRuleGroupReferences\": [{
+            \"ResourceArn\": \"${STATELESS_RG_ARN}\",
+            \"Priority\": 1
+          }],
+          \"StatefulEngineOptions\": {\"RuleOrder\": \"STRICT_ORDER\"},
+          \"StatefulRuleGroupReferences\": [{
+            \"ResourceArn\": \"${STRICT_STATEFUL_RG_ARN}\",
+            \"Priority\": 1
+          }],
+          \"TLSInspectionConfigurationArn\": \"${TLS_CONFIG_ARN}\"
+        }" \
+        --query 'FirewallPolicyResponse.FirewallPolicyArn' --output text)
+    fi
+    echo "  Policy ARN: ${TLS_POLICY_ARN}"
 
-    # 5. bench-fw-policy-phase3 をファイアウォールに関連付け
-    echo "[5/5] bench-fw-policy-phase3 をファイアウォールに関連付け..."
-    associate_policy "${PHASE3_POLICY_ARN}"
+    # 5. TLS検査付きのポリシーをファイアウォールに関連付け
+    echo "[5/5] bench-fw-policy-tls をファイアウォールに関連付け..."
+    associate_policy "${TLS_POLICY_ARN}"
     ;;
 
   *)
